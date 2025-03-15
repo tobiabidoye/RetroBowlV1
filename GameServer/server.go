@@ -9,18 +9,27 @@ import(
     "github.com/google/uuid"
 )
 
+//for our current structure players enter the server and then enter a specific room where they can talk with people in the same room
+type Room struct{
+    roomId string
+    players map[string]*Player //map to track each player in each room at the time
+    Mu sync.Mutex
+}
+
 type Player struct{
     playerId string
     Conn * websocket.Conn
 }
 
+const maxPlayers = 10
 
-const maxPlayers = 10 
 var(
     playersMu sync.Mutex
     players = make(map[string]*Player) //key value pair player 
+    rooms = make(map[string]*Room)
+    roomsMu sync.Mutex
 )
-
+     
 func main(){
     //setup handler route
     http.HandleFunc("/connect", handleWebsocket)
@@ -46,7 +55,14 @@ func handleWebsocket(w http.ResponseWriter, r * http.Request){
     defer conn.Close()
     //generate a unique id
     id := uuid.NewString()    
-    if err := addPlayer(id, conn); err != nil{
+    roomName := r.URL.Query().Get("room")
+    
+    if roomName == ""{
+        log.Fatal("no room specified")
+        return
+    }    
+
+    if err := addPlayer(id, conn, roomName); err != nil{
         //error handling for if adding player fails
         conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("error: %v", err)))
         return
@@ -67,15 +83,32 @@ func handleWebsocket(w http.ResponseWriter, r * http.Request){
 }
 
 //to add players
-func addPlayer(id string, conn *websocket.Conn) error{
-    playersMu.Lock()
-     
-    if len(players) >= maxPlayers{
+func addPlayer(id string, conn *websocket.Conn, roomName string) error{
+
+    roomsMu.Lock()
+    room,exists := rooms[roomName]
+    if !exists{
+        //create a new room at this point
+        val := make(map[string]*Player)
+        room = &Room{roomId: roomName, players: val,Mu: sync.Mutex{} }
+        rooms[roomName] = room
+    }
+    roomsMu.Unlock()
+
+
+    //check for count of players in a specific room
+    room.Mu.Lock()
+    defer room.Mu.Unlock()
+    playerCount := len(room.players)
+    if (playerCount) >= maxPlayers{
         return fmt.Errorf("too many players")
     } 
-
-    players[id] = &Player{playerId: id, Conn: conn}
-    playersMu.Unlock()
+    
+    curPlayer := &Player{playerId:id, Conn:conn}
+    //map which stores another map first map stores the room key is roomname value is the roomName
+    //store players in the room by storing them in a map with key being id and value being the actual player
+    room.players[id] = curPlayer
+    
     return nil
     
 }
@@ -115,4 +148,4 @@ func broadcastFunc(senderId string, messageType int, data[]byte){
     }
 
 
-        }
+}
