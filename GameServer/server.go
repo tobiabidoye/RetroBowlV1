@@ -57,13 +57,16 @@ func handleWebsocket(w http.ResponseWriter, r * http.Request){
         messageType, msg ,err := conn.ReadMessage()
         if err != nil{
             log.Println("received from", id, string(msg))
-            broadcastFunc(id, messageType, msg)
+            return
         }
+            log.Println("received from", id, string(msg))
+            broadcastFunc(id, messageType, msg)
     } 
 
 
 }
 
+//to add players
 func addPlayer(id string, conn *websocket.Conn) error{
     playersMu.Lock()
      
@@ -72,8 +75,9 @@ func addPlayer(id string, conn *websocket.Conn) error{
     } 
 
     players[id] = &Player{playerId: id, Conn: conn}
+    playersMu.Unlock()
     return nil
-
+    
 }
 
 func removePlayer(id string){
