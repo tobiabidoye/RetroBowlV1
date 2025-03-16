@@ -68,7 +68,7 @@ func handleWebsocket(w http.ResponseWriter, r * http.Request){
         return
     }
     //once function exits remove player 
-    defer removePlayer(id)
+    defer removePlayer(id, roomName)
     for{
         messageType, msg ,err := conn.ReadMessage()
         if err != nil{
@@ -76,7 +76,7 @@ func handleWebsocket(w http.ResponseWriter, r * http.Request){
             return
         }
             log.Println("received from", id, string(msg))
-            broadcastFunc(id, messageType, msg)
+            broadcastFunc(id, messageType, msg, roomName)
     } 
 
 
@@ -113,29 +113,67 @@ func addPlayer(id string, conn *websocket.Conn, roomName string) error{
     
 }
 
-func removePlayer(id string){
-    playersMu.Lock()
+func removePlayer(id string, roomName string)error{
+    
+    roomsMu.Lock()    
+    room,exists := rooms[roomName]
+    if !exists{ 
+        roomsMu.Unlock()
+        return fmt.Errorf("room %s does not exists", roomName) 
+    }
+    roomsMu.Unlock()
 
-    delete(players, id)
-    playersMu.Unlock()
+    room.Mu.Lock()
+    defer room.Mu.Unlock()
+    if _, exists := room.players[id]; !exists{
+        return fmt.Errorf("player with id %s does not exist to be removed", id)
+    }
+
+    delete(room.players, id)    
+    
+    //delete room if it is empty
+    roomsMu.Lock()
+    if len(room.players) == 0{ 
+        delete (rooms, roomName)
+    }
+    roomsMu.Unlock()
+    return nil
+   
 }
 
-//returns all players
-func getAllPlayers() []*Player{
-    playersMu.Lock()
-    res := make([]*Player, 0, len(players))
-    for _, p := range players{
+//returns all players in a room 
+func getAllPlayers(roomName string) []*Player{
+      
+    roomsMu.Lock()    
+    defer roomsMu.Unlock()
+    room,exists := rooms[roomName]
+    if !exists{ 
+        log.Printf("room does not exist with id %s",roomName)
+        return nil
+    }
+    room.Mu.Lock()
+    defer room.Mu.Unlock()
+    res := make([]*Player, 0, len(room.players))
+    for _, p := range room.players{
         res = append(res, p) 
     }
-    playersMu.Unlock() 
+   
     return res
 
 }
 
-func broadcastFunc(senderId string, messageType int, data[]byte){   
-    playersMu.Lock()
-    defer playersMu.Unlock()
-    for _, player := range players{
+func broadcastFunc(senderId string, messageType int, data[]byte, roomName string) error{
+    slice := make([]string, 0, 10)
+    roomsMu.Lock()
+
+    defer roomsMu.Unlock()
+    room,exists := rooms[roomName]
+    if !exists{ 
+        return fmt.Errorf("room %s does not exists", roomName) 
+    }
+    room.Mu.Lock()
+    defer room.Mu.Unlock()
+    for _, player := range room.players{
         if player.playerId == senderId{
             continue
         } 
@@ -143,9 +181,13 @@ func broadcastFunc(senderId string, messageType int, data[]byte){
         err := player.Conn.WriteMessage(messageType, data)
         
         if err != nil{
-            log.Printf("error writinf to %s: %v\n", player.playerId, err)
+            log.Printf("error writinf to %s: %v\n", player.playerId, err) 
+            slice = append(slice, player.playerId)
         }
     }
+    for i := 0; i < len(slice); i++{
+        removePlayer(slice[i], roomName) 
+    }
 
-
+    return nil
 }
